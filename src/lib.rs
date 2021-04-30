@@ -1,6 +1,11 @@
-mod sleep_default;
+#[cfg_attr(target_os = "windows", path = "sleep_windows.rs")]
+#[cfg_attr(not(target_os = "windows"), path = "sleep_default.rs")]
+mod sleep;
 
-use sleep_default as sleep;
+#[cfg(target_os = "windows")]
+mod win_bindings {
+    windows::include_bindings!();
+}
 
 use sleep::SleeperImpl;
 use std::time::Duration;
@@ -17,6 +22,14 @@ impl Sleeper {
     }
 }
 
+impl Drop for Sleeper {
+    /// Some APIs require resource cleanup
+    /// So we add manual Drop here to make it dropped in every platform.
+    /// It can prevent some multiplatform breakages.
+    #[inline]
+    fn drop(&mut self) {}
+}
+
 pub fn sleep(duration: Duration) {
     Sleeper::new().sleep(duration);
 }
@@ -27,14 +40,14 @@ mod tests {
     use std::time::{Duration, Instant};
     #[test]
     fn test_sleep() {
-        let duration = Duration::from_millis(10);
+        let duration = Duration::from_micros(500);
         let start = Instant::now();
         sleep(duration);
         let elapsed = start.elapsed();
-        assert!(elapsed >= duration, "{:?}", elapsed);
+        assert!(elapsed >= duration, "Too short {:?}", elapsed);
         assert!(
             elapsed <= duration + Duration::from_millis(1),
-            "{:?}",
+            "Too long {:?}",
             elapsed
         );
     }
@@ -47,10 +60,10 @@ mod tests {
         let start = Instant::now();
         sleeper.sleep(duration);
         let elapsed = start.elapsed();
-        assert!(elapsed >= duration, "{:?}", elapsed);
+        assert!(elapsed >= duration, "Too short {:?}", elapsed);
         assert!(
             elapsed <= duration + Duration::from_millis(1),
-            "{:?}",
+            "Too long {:?}",
             elapsed
         );
 
@@ -58,10 +71,10 @@ mod tests {
         let start = Instant::now();
         sleeper.sleep(duration);
         let elapsed = start.elapsed();
-        assert!(elapsed >= duration, "{:?}", elapsed);
+        assert!(elapsed >= duration, "Too short {:?}", elapsed);
         assert!(
             elapsed <= duration + Duration::from_millis(1),
-            "{:?}",
+            "Too long {:?}",
             elapsed
         );
     }
