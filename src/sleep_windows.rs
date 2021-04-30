@@ -82,3 +82,34 @@ unsafe fn panic_on_win32_error(message: &'static str) -> ! {
     HRESULT::from_thread().ok().expect(message);
     unreachable!("Should have error because failed")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::SleeperImpl;
+
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn test_sleeper_very_precise() {
+        const TRIES: u16 = 100;
+        let mut sleeper = SleeperImpl::new();
+        let duration = Duration::from_micros(500);
+        let mut times = Vec::with_capacity(TRIES.into());
+
+        for _ in 0..TRIES {
+            let start = Instant::now();
+            sleeper.sleep(duration);
+            let elapsed = start.elapsed();
+            times.push(elapsed);
+        }
+
+        assert!(times.iter().all(|&x| x >= duration));
+
+        let mean = times.iter().copied().sum::<Duration>() / TRIES.into();
+        assert!(
+            mean < duration + Duration::from_micros(300),
+            "Mean too big {:?}",
+            mean
+        );
+    }
+}

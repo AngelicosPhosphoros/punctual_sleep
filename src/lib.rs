@@ -10,7 +10,7 @@ mod win_bindings {
 use sleep::SleeperImpl;
 use std::time::Duration;
 
-struct Sleeper(SleeperImpl);
+pub struct Sleeper(SleeperImpl);
 
 impl Sleeper {
     pub fn new() -> Self {
@@ -37,45 +37,64 @@ pub fn sleep(duration: Duration) {
 #[cfg(test)]
 mod tests {
     use super::{sleep, Sleeper};
+    use std::convert::TryFrom;
     use std::time::{Duration, Instant};
+
+    fn assert_mean(
+        observations: &[Duration],
+        target: Duration,
+        allowed_mean_fluctuation: Duration,
+    ) {
+        for &dur in observations.iter() {
+            assert!(
+                target <= dur,
+                "Sleep less than requested {:?} < {:?}",
+                dur,
+                target
+            );
+        }
+        let sum: Duration = observations.iter().map(|&x| x - target).sum();
+        let mean = sum / u32::try_from(observations.len()).unwrap();
+        assert!(
+            mean < allowed_mean_fluctuation,
+            "Mean exceeds allowed fluctuation {:?}>{:?}",
+            mean,
+            allowed_mean_fluctuation
+        );
+    }
+
     #[test]
     fn test_sleep() {
-        let duration = Duration::from_micros(500);
-        let start = Instant::now();
-        sleep(duration);
-        let elapsed = start.elapsed();
-        assert!(elapsed >= duration, "Too short {:?}", elapsed);
-        assert!(
-            elapsed <= duration + Duration::from_millis(1),
-            "Too long {:?}",
-            elapsed
-        );
+        let duration = Duration::from_millis(5);
+        let mut observations = Vec::new();
+        for _ in 0..100 {
+            let start = Instant::now();
+            sleep(duration);
+            let elapsed = start.elapsed();
+            observations.push(elapsed);
+        }
+        assert_mean(&observations, duration, Duration::from_millis(1));
     }
 
     #[test]
     fn test_sleeper() {
         let mut sleeper = Sleeper::new();
+        let duration0 = Duration::from_millis(5);
+        let duration1 = Duration::from_millis(10);
+        let mut observations0 = Vec::new();
+        let mut observations1 = Vec::new();
+        for _ in 0..100 {
+            let start = Instant::now();
+            sleeper.sleep(duration0);
+            let elapsed = start.elapsed();
+            observations0.push(elapsed);
 
-        let duration = Duration::from_millis(10);
-        let start = Instant::now();
-        sleeper.sleep(duration);
-        let elapsed = start.elapsed();
-        assert!(elapsed >= duration, "Too short {:?}", elapsed);
-        assert!(
-            elapsed <= duration + Duration::from_millis(1),
-            "Too long {:?}",
-            elapsed
-        );
-
-        let duration = Duration::from_millis(30);
-        let start = Instant::now();
-        sleeper.sleep(duration);
-        let elapsed = start.elapsed();
-        assert!(elapsed >= duration, "Too short {:?}", elapsed);
-        assert!(
-            elapsed <= duration + Duration::from_millis(1),
-            "Too long {:?}",
-            elapsed
-        );
+            let start = Instant::now();
+            sleeper.sleep(duration1);
+            let elapsed = start.elapsed();
+            observations1.push(elapsed);
+        }
+        assert_mean(&observations0, duration0, Duration::from_millis(1));
+        assert_mean(&observations1, duration1, Duration::from_millis(1));
     }
 }
