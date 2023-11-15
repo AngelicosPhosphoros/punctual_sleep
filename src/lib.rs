@@ -2,13 +2,9 @@
 #[cfg_attr(not(target_os = "windows"), path = "sleep_default.rs")]
 mod sleep;
 
-#[cfg(target_os = "windows")]
-mod win_bindings {
-    windows::include_bindings!();
-}
+use core::time::Duration;
 
 use sleep::SleeperImpl;
-use std::time::Duration;
 
 pub struct Sleeper(SleeperImpl);
 
@@ -17,8 +13,23 @@ impl Sleeper {
         Self(SleeperImpl::new())
     }
 
-    pub fn sleep(&mut self, duration: Duration) {
-        self.0.sleep(duration)
+    /// # Safety
+    /// Caller must ensure that there is only one thread that calls this method in a time.
+    /// # Panics
+    /// On low probability errors from Windows API.
+    #[cfg_attr(not(target_os = "windows"), inline)]
+    pub unsafe fn sleep(&mut self, duration: Duration) {
+        unsafe {
+            // SAFETY: This method have same safety requrements as caller method.
+            self.0.sleep(duration);
+        }
+    }
+}
+
+impl Default for Sleeper {
+    #[inline]
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -30,8 +41,16 @@ impl Drop for Sleeper {
     fn drop(&mut self) {}
 }
 
+/// Calls platform specific precise sleeping routine for specified platform.
+/// Note that it is just a convenient (and safe) wrapper over creating [`Sleeper`](crate::Sleeper) and calling
+/// [`Sleeper::sleep`](crate::Sleeper::sleep) so it may be more effecient to create `Sleeper` once and keep it.
+/// However, cost of creating `Sleeper`s are not very high so you can safely ignore it.
+#[cfg_attr(not(target_os = "windows"), inline)]
 pub fn sleep(duration: Duration) {
-    Sleeper::new().sleep(duration);
+    unsafe {
+        // SAFETY: We don't pass created timer to other threads.
+        Sleeper::new().sleep(duration);
+    }
 }
 
 #[cfg(test)]
@@ -44,6 +63,7 @@ mod tests {
         observations: &[Duration],
         target: Duration,
         allowed_mean_fluctuation: Duration,
+        allowed_max: Duration,
     ) {
         for &dur in observations.iter() {
             assert!(
@@ -55,12 +75,21 @@ mod tests {
         }
         let sum: Duration = observations.iter().map(|&x| x - target).sum();
         let mean = sum / u32::try_from(observations.len()).unwrap();
+        let maximum = *observations.iter().max().unwrap();
+
         assert!(
             mean < allowed_mean_fluctuation,
             "Mean exceeds allowed fluctuation {:?}>{:?}",
             mean,
             allowed_mean_fluctuation
         );
+
+        assert!(
+            maximum < allowed_max,
+            "Max running time ({:?}) exceeds limit {:?}",
+            maximum,
+            allowed_max
+        )
     }
 
     #[test]
@@ -73,7 +102,12 @@ mod tests {
             let elapsed = start.elapsed();
             observations.push(elapsed);
         }
-        assert_mean(&observations, duration, Duration::from_millis(1));
+        assert_mean(
+            &observations,
+            duration,
+            Duration::from_millis(1),
+            duration + Duration::from_millis(2),
+        );
     }
 
     #[test]
@@ -85,16 +119,32 @@ mod tests {
         let mut observations1 = Vec::new();
         for _ in 0..100 {
             let start = Instant::now();
-            sleeper.sleep(duration0);
+            unsafe {
+                // SAFETY: Current threads owns timer.
+                sleeper.sleep(duration0);
+            }
             let elapsed = start.elapsed();
             observations0.push(elapsed);
 
             let start = Instant::now();
-            sleeper.sleep(duration1);
+            unsafe {
+                // SAFETY: Current threads owns timer.
+                sleeper.sleep(duration1);
+            }
             let elapsed = start.elapsed();
             observations1.push(elapsed);
         }
-        assert_mean(&observations0, duration0, Duration::from_millis(1));
-        assert_mean(&observations1, duration1, Duration::from_millis(1));
+        assert_mean(
+            &observations0,
+            duration0,
+            Duration::from_millis(1),
+            duration0 + Duration::from_millis(2),
+        );
+        assert_mean(
+            &observations1,
+            duration1,
+            Duration::from_millis(1),
+            duration1 + Duration::from_millis(2),
+        );
     }
 }

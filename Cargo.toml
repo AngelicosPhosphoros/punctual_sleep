@@ -1,15 +1,22 @@
 [package]
 name = "punctual_sleep"
-version = "0.0.1"
+version = "0.1.0"
 authors = ["AngelicosPhosphoros <angelicos.phosphoros@protonmail.com>"]
-edition = "2018"
+edition = "2021"
 license = "Apache-2.0/MIT"
 description = "Crate for more precise sleeping"
+rust-version = "1.73"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
-[target.'cfg(target_os = "windows")'.dependencies]
-windows = "0.9"
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.48"
+features = [
+    "Win32_System_Threading", 
+    "Win32_Foundation",
+    "Win32_Security"
+]
 
-[target.'cfg(target_os = "windows")'.build-dependencies]
-windows = "0.9"
+[profile.test]
+# To ensure that our performance doesn't affect our timings badly.
+opt-level = 1

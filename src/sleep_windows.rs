@@ -1,14 +1,12 @@
-use std::convert::TryInto;
-use std::time::Duration;
+use core::convert::TryInto;
+use core::time::Duration;
 
-use crate::win_bindings::{
-    Windows::Win32::SystemServices::{
-        CreateWaitableTimerExW, SetWaitableTimerEx, WaitForSingleObject,
-        CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, HANDLE, PWSTR, WAIT_RETURN_CAUSE,
-    },
-    Windows::Win32::WindowsProgramming::CloseHandle,
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_FAILED};
+use windows::Win32::System::Threading::{
+    CreateWaitableTimerExW, SetWaitableTimerEx, WaitForSingleObject,
+    CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, INFINITE,
 };
-use windows::HRESULT;
 
 pub(crate) struct SleeperImpl {
     timer: HANDLE,
@@ -29,23 +27,29 @@ impl Drop for SleeperImpl {
 impl SleeperImpl {
     pub(crate) fn new() -> Self {
         let timer: HANDLE = unsafe {
+            // TODO: Check also TIMER_MODIFY_STATE https://learn.microsoft.com/en-us/windows/win32/api/synchapi/nf-synchapi-setwaitabletimerex
             const TIMER_ALL_ACCESS: u32 = 0x1f0003;
             let handle = CreateWaitableTimerExW(
-                std::ptr::null_mut(),
-                PWSTR::NULL,
+                // We don't need security guarantees because we don't expect sleep timer to be sent to other processes.
+                None,
+                // Note:
+                PCWSTR::null(),
                 CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
                 TIMER_ALL_ACCESS,
             );
-            if handle.is_null() {
-                panic_on_win32_error("Failed to create waitable timer for punctual_timer")
-            }
-            handle
+            // I honestly don't know what calling application can do in such case.
+            // And main reason of errors is collision of names for timers
+            // which we don't use anyway so it is unlikely to happen.
+            handle.expect("Failed to create waitable timer for punctual_timer")
         };
         Self { timer }
     }
 
-    pub(crate) fn sleep(&mut self, duration: Duration) {
+    /// # Safety
+    /// Caller must ensure that there is only one thread that calls this method in a time.
+    pub(crate) unsafe fn sleep(&mut self, duration: Duration) {
         // Minimal resolution is 100 ns.
+        //
         const RESOLUTION_NS: i64 = 100;
         const CHUNK_PER_SEC: i64 = 10_000_000;
         let secs: i64 = duration
@@ -53,7 +57,7 @@ impl SleeperImpl {
             .try_into()
             .expect("Too large sleep duration");
         let nanos: i64 = duration.subsec_nanos().into();
-        // Use -1 to indicate relative time
+        // Use negative value to indicate relative time.
         let sleep_time: i64 = -(nanos / RESOLUTION_NS + secs * CHUNK_PER_SEC);
         unsafe {
             SetWaitableTimerEx(
@@ -61,26 +65,20 @@ impl SleeperImpl {
                 &sleep_time as *const i64,
                 0,
                 None,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
+                None,
+                None,
                 0,
             )
             .ok()
             .expect("Failed to set waitable timer for punctual_timer");
 
-            let wait_result = WaitForSingleObject(self.timer, u32::MAX);
-            if wait_result == WAIT_RETURN_CAUSE::WAIT_FAILED {
-                panic_on_win32_error("Failed to wait for timer in punctual_timer");
+            let wait_result = WaitForSingleObject(self.timer, INFINITE);
+            if wait_result == WAIT_FAILED {
+                // Should not happen because we only waiting for a timer.
+                panic!("Failed to wait on timer!");
             }
         }
     }
-}
-
-// Safety: Should be called when some WinAPI operation failed
-#[cold]
-unsafe fn panic_on_win32_error(message: &'static str) -> ! {
-    HRESULT::from_thread().ok().expect(message);
-    unreachable!("Should have error because failed")
 }
 
 #[cfg(test)]
@@ -98,7 +96,10 @@ mod tests {
 
         for _ in 0..TRIES {
             let start = Instant::now();
-            sleeper.sleep(duration);
+            unsafe {
+                // SAFETY: Current thread owns the timer.
+                sleeper.sleep(duration);
+            }
             let elapsed = start.elapsed();
             times.push(elapsed);
         }
@@ -107,9 +108,16 @@ mod tests {
 
         let mean = times.iter().copied().sum::<Duration>() / TRIES.into();
         assert!(
-            mean < duration + Duration::from_micros(300),
+            mean < duration + Duration::from_millis(1),
             "Mean too big {:?}",
             mean
+        );
+
+        let maximum_derivation = times.iter().map(|&x| x - duration).max().unwrap();
+        assert!(
+            maximum_derivation < Duration::from_millis(2),
+            "Derivation is too big {:?}",
+            maximum_derivation
         );
     }
 }
